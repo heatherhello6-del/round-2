@@ -15,7 +15,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download v2 \
+          gh release download 2.0 \
             --repo heatherhello6-del/round-2 \
             --pattern "round.2.zip" \
             --output ios.zip
@@ -52,6 +52,8 @@ jobs:
           cd "$ROOT"
 
           if [ -d "Unity-iPhone.xcworkspace" ]; then
+            echo "Building Unity-iPhone.xcworkspace"
+
             xcodebuild \
               -workspace Unity-iPhone.xcworkspace \
               -scheme Unity-iPhone \
@@ -62,6 +64,8 @@ jobs:
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY=""
           else
+            echo "Building Unity-iPhone.xcodeproj"
+
             xcodebuild \
               -project Unity-iPhone.xcodeproj \
               -scheme Unity-iPhone \
@@ -91,7 +95,11 @@ jobs:
 
           mkdir -p Payload
           cp -R "$APP" Payload/
+
           zip -qry FlappyCraftz-Round2-Unsigned.ipa Payload
+
+          echo "Created IPA:"
+          ls -lh FlappyCraftz-Round2-Unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
