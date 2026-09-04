@@ -3,13 +3,25 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-26
 
     steps:
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+
       - name: Checkout repo
         uses: actions/checkout@v4
+
+
+      # =========================================================
+      # DOWNLOAD LATEST UNITY IOS EXPORT
+      # =========================================================
 
       - name: Download latest iOS zip
         env:
@@ -20,10 +32,20 @@ jobs:
             --pattern "round.2.zip" \
             --output ios.zip
 
+
+      # =========================================================
+      # UNZIP IOS PROJECT
+      # =========================================================
+
       - name: Unzip iOS project
         run: |
           mkdir -p iosbuild
           unzip -q ios.zip -d iosbuild
+
+
+      # =========================================================
+      # FIND UNITY IOS PROJECT
+      # =========================================================
 
       - name: Find Unity iOS root
         run: |
@@ -31,7 +53,10 @@ jobs:
 
           if [ -z "$PODFILE" ]; then
             echo "ERROR: Could not find Podfile"
+
+            echo "Files found:"
             find iosbuild -maxdepth 3 -type f | head -100
+
             exit 1
           fi
 
@@ -40,41 +65,67 @@ jobs:
           echo "Found Podfile:"
           echo "$PODFILE"
 
-          echo "Found project root:"
+          echo "Found Unity iOS root:"
           echo "$ROOT"
+
+
+      # =========================================================
+      # XCODE INFO
+      # =========================================================
 
       - name: Show Xcode version
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Cache CocoaPods
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/CocoaPods
-            ~/.cocoapods
-          key: ${{ runner.os }}-pods-${{ hashFiles('iosbuild/**/Podfile') }}
-          restore-keys: |
-            ${{ runner.os }}-pods-
+
+      # =========================================================
+      # INSTALL COCOAPODS
+      # REQUIRED FOR ADMOB / LEVELPLAY
+      # =========================================================
 
       - name: Install CocoaPods
         run: |
           PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+
+          if [ -z "$PODFILE" ]; then
+            echo "ERROR: Could not find Podfile"
+            exit 1
+          fi
+
           ROOT=$(dirname "$PODFILE")
 
+          echo "Running CocoaPods inside:"
+          echo "$ROOT"
+
           cd "$ROOT"
+
           pod install
+
+
+      # =========================================================
+      # BUILD UNITY IOS APP
+      # =========================================================
 
       - name: Build Unity iOS app
         run: |
           PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+
+          if [ -z "$PODFILE" ]; then
+            echo "ERROR: Could not find Podfile"
+            exit 1
+          fi
+
           ROOT=$(dirname "$PODFILE")
 
           cd "$ROOT"
 
+          echo "Current directory:"
+          pwd
+
           if [ -d "Unity-iPhone.xcworkspace" ]; then
-            echo "Building Unity-iPhone.xcworkspace"
+
+            echo "Building Unity-iPhone.xcworkspace..."
 
             xcodebuild \
               -workspace Unity-iPhone.xcworkspace \
@@ -85,8 +136,10 @@ jobs:
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY=""
-          else
-            echo "Building Unity-iPhone.xcodeproj"
+
+          elif [ -d "Unity-iPhone.xcodeproj" ]; then
+
+            echo "Building Unity-iPhone.xcodeproj..."
 
             xcodebuild \
               -project Unity-iPhone.xcodeproj \
@@ -97,7 +150,36 @@ jobs:
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY=""
+
+          else
+
+            echo "ERROR: Could not find Unity-iPhone.xcworkspace or Unity-iPhone.xcodeproj"
+
+            ls -la
+
+            exit 1
+
           fi
+
+
+      # =========================================================
+      # FIND BUILT APP
+      # =========================================================
+
+      - name: Find built app
+        run: |
+          echo "Looking for generated .app..."
+
+          find "$GITHUB_WORKSPACE/build" \
+            -type d \
+            -name "*.app" \
+            -maxdepth 8 \
+            -print
+
+
+      # =========================================================
+      # CREATE UNSIGNED IPA
+      # =========================================================
 
       - name: Create unsigned IPA
         run: |
@@ -108,20 +190,35 @@ jobs:
             -print \
             -quit)
 
-          echo "Found app: $APP"
+          echo "Found app:"
+          echo "$APP"
 
           if [ -z "$APP" ]; then
             echo "ERROR: No .app was produced"
+
+            echo "Build products:"
+            find "$GITHUB_WORKSPACE/build/Build/Products" \
+              -maxdepth 3 \
+              -type d \
+              -print
+
             exit 1
           fi
 
+          rm -rf Payload
           mkdir -p Payload
+
           cp -R "$APP" Payload/
 
           zip -qry FlappyCraftz-Unsigned.ipa Payload
 
-          echo "Created IPA:"
+          echo "IPA created successfully:"
           ls -lh FlappyCraftz-Unsigned.ipa
+
+
+      # =========================================================
+      # UPLOAD IPA
+      # =========================================================
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
