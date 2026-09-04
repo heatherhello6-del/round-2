@@ -22,20 +22,26 @@ jobs:
 
       - name: Unzip iOS project
         run: |
-          mkdir iosbuild
+          mkdir -p iosbuild
           unzip -q ios.zip -d iosbuild
 
       - name: Find Unity iOS root
         run: |
-          ROOT=$(find iosbuild -name "Podfile" -type f -print -quit | xargs dirname)
+          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
 
-          if [ -z "$ROOT" ]; then
+          if [ -z "$PODFILE" ]; then
             echo "ERROR: Could not find Podfile"
+            find iosbuild -maxdepth 3 -type f | head -100
             exit 1
           fi
 
-          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Found project at: $ROOT"
+          ROOT=$(dirname "$PODFILE")
+
+          echo "Found Podfile:"
+          echo "$PODFILE"
+
+          echo "Found project root:"
+          echo "$ROOT"
 
       - name: Show Xcode version
         run: |
@@ -44,15 +50,21 @@ jobs:
 
       - name: Install CocoaPods
         run: |
+          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+          ROOT=$(dirname "$PODFILE")
+
           cd "$ROOT"
           pod install
 
       - name: Build Unity iOS app
         run: |
+          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+          ROOT=$(dirname "$PODFILE")
+
           cd "$ROOT"
 
           if [ -d "Unity-iPhone.xcworkspace" ]; then
-            echo "Building Unity-iPhone.xcworkspace"
+            echo "Building workspace..."
 
             xcodebuild \
               -workspace Unity-iPhone.xcworkspace \
@@ -64,7 +76,7 @@ jobs:
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY=""
           else
-            echo "Building Unity-iPhone.xcodeproj"
+            echo "Building Xcode project..."
 
             xcodebuild \
               -project Unity-iPhone.xcodeproj \
@@ -98,7 +110,6 @@ jobs:
 
           zip -qry FlappyCraftz-Round2-Unsigned.ipa Payload
 
-          echo "Created IPA:"
           ls -lh FlappyCraftz-Round2-Unsigned.ipa
 
       - name: Upload IPA
