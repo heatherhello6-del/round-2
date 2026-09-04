@@ -1,1 +1,101 @@
+name: Build iOS IPA
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download round 2 iOS zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v2 \
+            --repo heatherhello6-del/round-2 \
+            --pattern "round.2.zip" \
+            --output ios.zip
+
+      - name: Unzip iOS project
+        run: |
+          mkdir iosbuild
+          unzip -q ios.zip -d iosbuild
+
+      - name: Find Unity iOS root
+        run: |
+          ROOT=$(find iosbuild -name "Podfile" -type f -print -quit | xargs dirname)
+
+          if [ -z "$ROOT" ]; then
+            echo "ERROR: Could not find Podfile"
+            exit 1
+          fi
+
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Found project at: $ROOT"
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install CocoaPods
+        run: |
+          cd "$ROOT"
+          pod install
+
+      - name: Build Unity iOS app
+        run: |
+          cd "$ROOT"
+
+          if [ -d "Unity-iPhone.xcworkspace" ]; then
+            xcodebuild \
+              -workspace Unity-iPhone.xcworkspace \
+              -scheme Unity-iPhone \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath "$GITHUB_WORKSPACE/build" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
+          else
+            xcodebuild \
+              -project Unity-iPhone.xcodeproj \
+              -scheme Unity-iPhone \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath "$GITHUB_WORKSPACE/build" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
+          fi
+
+      - name: Create unsigned IPA
+        run: |
+          APP=$(find "$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos" \
+            -maxdepth 1 \
+            -name "*.app" \
+            -type d \
+            -print \
+            -quit)
+
+          echo "Found app: $APP"
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: No .app was produced"
+            exit 1
+          fi
+
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry FlappyCraftz-Round2-Unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlappyCraftz-Round2-IPA
+          path: FlappyCraftz-Round2-Unsigned.ipa
+          if-no-files-found: error
