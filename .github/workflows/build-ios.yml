@@ -70,6 +70,37 @@ jobs:
 
 
       # =========================================================
+      # FIX UNITY SHELL SCRIPT PERMISSIONS
+      # =========================================================
+
+      - name: Fix Unity script permissions
+        run: |
+          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+
+          if [ -z "$PODFILE" ]; then
+            echo "ERROR: Could not find Podfile"
+            exit 1
+          fi
+
+          ROOT=$(dirname "$PODFILE")
+
+          echo "Fixing executable permissions inside:"
+          echo "$ROOT"
+
+          find "$ROOT" -type f -name "*.sh" -exec chmod +x {} \;
+
+          if [ -f "$ROOT/usymtool" ]; then
+            chmod +x "$ROOT/usymtool"
+          fi
+
+          if [ -f "$ROOT/usymtoolarm64" ]; then
+            chmod +x "$ROOT/usymtoolarm64"
+          fi
+
+          echo "Unity script permissions fixed."
+
+
+      # =========================================================
       # XCODE INFO
       # =========================================================
 
@@ -171,9 +202,9 @@ jobs:
           echo "Looking for generated .app..."
 
           find "$GITHUB_WORKSPACE/build" \
+            -maxdepth 8 \
             -type d \
             -name "*.app" \
-            -maxdepth 8 \
             -print
 
 
