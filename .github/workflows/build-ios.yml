@@ -11,245 +11,157 @@ jobs:
     runs-on: macos-26
 
     steps:
-      # =========================================================
-      # CHECKOUT
-      # =========================================================
-
+      # Checkout the workflow repository.
       - name: Checkout repo
         uses: actions/checkout@v4
 
-
-      # =========================================================
-      # DOWNLOAD LATEST UNITY IOS EXPORT
-      # =========================================================
-
+      # Get the latest release asset containing the Unity iOS Xcode export.
       - name: Download latest iOS zip
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
           gh release download \
             --repo heatherhello6-del/round-2 \
             --pattern "round.2.zip" \
             --output ios.zip
 
-
-      # =========================================================
-      # UNZIP IOS PROJECT
-      # =========================================================
-
       - name: Unzip iOS project
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p iosbuild
           unzip -q ios.zip -d iosbuild
 
-
-      # =========================================================
-      # FIND UNITY IOS PROJECT
-      # =========================================================
-
+      # A Podfile is optional at this stage, but the Xcode project is not.
       - name: Find Unity iOS root
+        shell: bash
         run: |
-          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+          set -euo pipefail
 
-          if [ -z "$PODFILE" ]; then
-            echo "ERROR: Could not find Podfile"
+          PROJECT_FILE=$(find iosbuild -type f \
+            -path '*/Unity-iPhone.xcodeproj/project.pbxproj' \
+            -print -quit)
 
-            echo "Files found:"
-            find iosbuild -maxdepth 3 -type f | head -100
-
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "::error::Unity-iPhone.xcodeproj/project.pbxproj not found in round.2.zip."
+            echo "The ZIP must contain the complete Unity iOS Xcode export."
+            echo "Project-related files and folders found:"
+            find iosbuild -maxdepth 7 \( -name '*.xcodeproj' -o -name '*.xcworkspace' -o -name 'project.pbxproj' -o -name 'Podfile' \) -print | head -100
+            echo "Sample exported files:"
+            find iosbuild -maxdepth 5 -type f | head -70
             exit 1
           fi
 
-          ROOT=$(dirname "$PODFILE")
+          IOS_ROOT=$(cd "$(dirname "$(dirname "$PROJECT_FILE")")" && pwd)
 
-          echo "Found Podfile:"
-          echo "$PODFILE"
+          echo "IOS_ROOT=$IOS_ROOT" >> "$GITHUB_ENV"
+          echo "Unity iOS root: $IOS_ROOT"
+          ls -la "$IOS_ROOT" | head -70
 
-          echo "Found Unity iOS root:"
-          echo "$ROOT"
-
-
-      # =========================================================
-      # FIX UNITY SHELL SCRIPT PERMISSIONS
-      # =========================================================
+          if [ -f "$IOS_ROOT/Podfile" ]; then
+            echo "HAS_PODFILE=true" >> "$GITHUB_ENV"
+            echo "Found Podfile at: $IOS_ROOT/Podfile"
+          else
+            echo "HAS_PODFILE=false" >> "$GITHUB_ENV"
+            echo "::warning::No Podfile in Unity export. CocoaPods will be skipped. AdMob/LevelPlay may require a re-export with iOS dependency resolution enabled."
+          fi
 
       - name: Fix Unity script permissions
+        shell: bash
         run: |
-          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
-
-          if [ -z "$PODFILE" ]; then
-            echo "ERROR: Could not find Podfile"
-            exit 1
-          fi
-
-          ROOT=$(dirname "$PODFILE")
-
-          echo "Fixing executable permissions inside:"
-          echo "$ROOT"
-
-          find "$ROOT" -type f -name "*.sh" -exec chmod +x {} \;
-
-          if [ -f "$ROOT/usymtool" ]; then
-            chmod +x "$ROOT/usymtool"
-          fi
-
-          if [ -f "$ROOT/usymtoolarm64" ]; then
-            chmod +x "$ROOT/usymtoolarm64"
-          fi
-
-          echo "Unity script permissions fixed."
-
-
-      # =========================================================
-      # XCODE INFO
-      # =========================================================
+          set -euo pipefail
+          echo "Fixing Unity shell script permissions in $IOS_ROOT"
+          find "$IOS_ROOT" -type f -name '*.sh' -exec chmod +x {} +
+          find "$IOS_ROOT" -type f -name 'usymtool*' -exec chmod +x {} +
 
       - name: Show Xcode version
+        shell: bash
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-
-      # =========================================================
-      # INSTALL COCOAPODS
-      # REQUIRED FOR ADMOB / LEVELPLAY
-      # =========================================================
-
       - name: Install CocoaPods
+        if: env.HAS_PODFILE == 'true'
+        shell: bash
         run: |
-          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
-
-          if [ -z "$PODFILE" ]; then
-            echo "ERROR: Could not find Podfile"
-            exit 1
+          set -euo pipefail
+          if ! command -v pod >/dev/null 2>&1; then
+            brew install cocoapods
           fi
-
-          ROOT=$(dirname "$PODFILE")
-
-          echo "Running CocoaPods inside:"
-          echo "$ROOT"
-
-          cd "$ROOT"
-
-          pod install
-
-
-      # =========================================================
-      # BUILD UNITY IOS APP
-      # =========================================================
+          cd "$IOS_ROOT"
+          pod install --repo-update
 
       - name: Build Unity iOS app
+        shell: bash
         run: |
-          PODFILE=$(find iosbuild -type f -name "Podfile" -print -quit)
+          set -euo pipefail
+          cd "$IOS_ROOT"
+          echo "Building from: $(pwd)"
 
-          if [ -z "$PODFILE" ]; then
-            echo "ERROR: Could not find Podfile"
-            exit 1
-          fi
-
-          ROOT=$(dirname "$PODFILE")
-
-          cd "$ROOT"
-
-          echo "Current directory:"
-          pwd
-
-          if [ -d "Unity-iPhone.xcworkspace" ]; then
-
-            echo "Building Unity-iPhone.xcworkspace..."
-
+          if [ -d 'Unity-iPhone.xcworkspace' ]; then
+            echo "Building Unity-iPhone.xcworkspace"
             xcodebuild \
               -workspace Unity-iPhone.xcworkspace \
               -scheme Unity-iPhone \
               -configuration Release \
               -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
               -derivedDataPath "$GITHUB_WORKSPACE/build" \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY=""
-
-          elif [ -d "Unity-iPhone.xcodeproj" ]; then
-
-            echo "Building Unity-iPhone.xcodeproj..."
-
+              CODE_SIGN_IDENTITY=''
+          elif [ -d 'Unity-iPhone.xcodeproj' ]; then
+            echo "Building Unity-iPhone.xcodeproj"
             xcodebuild \
               -project Unity-iPhone.xcodeproj \
               -scheme Unity-iPhone \
               -configuration Release \
               -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
               -derivedDataPath "$GITHUB_WORKSPACE/build" \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY=""
-
+              CODE_SIGN_IDENTITY=''
           else
-
-            echo "ERROR: Could not find Unity-iPhone.xcworkspace or Unity-iPhone.xcodeproj"
-
-            ls -la
-
+            echo "::error::No Unity-iPhone.xcodeproj or Unity-iPhone.xcworkspace found in $IOS_ROOT"
             exit 1
-
           fi
-
-
-      # =========================================================
-      # FIND BUILT APP
-      # =========================================================
 
       - name: Find built app
+        shell: bash
         run: |
-          echo "Looking for generated .app..."
-
-          find "$GITHUB_WORKSPACE/build" \
-            -maxdepth 8 \
-            -type d \
-            -name "*.app" \
-            -print
-
-
-      # =========================================================
-      # CREATE UNSIGNED IPA
-      # =========================================================
+          set -euo pipefail
+          echo "Looking for generated .app bundles..."
+          find "$GITHUB_WORKSPACE/build/Build/Products" -type d -name '*.app' -print
 
       - name: Create unsigned IPA
+        shell: bash
         run: |
-          APP=$(find "$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos" \
-            -maxdepth 1 \
-            -name "*.app" \
-            -type d \
-            -print \
-            -quit)
+          set -euo pipefail
+          PRODUCTS="$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos"
 
-          echo "Found app:"
-          echo "$APP"
-
-          if [ -z "$APP" ]; then
-            echo "ERROR: No .app was produced"
-
-            echo "Build products:"
-            find "$GITHUB_WORKSPACE/build/Build/Products" \
-              -maxdepth 3 \
-              -type d \
-              -print
-
+          if [ ! -d "$PRODUCTS" ]; then
+            echo "::error::Xcode produced no Release-iphoneos directory."
             exit 1
           fi
 
-          rm -rf Payload
-          mkdir -p Payload
+          APP=$(find "$PRODUCTS" -maxdepth 1 -type d -name '*.app' -print -quit)
 
-          cp -R "$APP" Payload/
+          if [ -z "$APP" ]; then
+            echo "::error::No .app was produced under $PRODUCTS"
+            find "$GITHUB_WORKSPACE/build/Build/Products" -maxdepth 3 -print | head -100
+            exit 1
+          fi
 
-          zip -qry FlappyCraftz-Unsigned.ipa Payload
-
-          echo "IPA created successfully:"
-          ls -lh FlappyCraftz-Unsigned.ipa
-
-
-      # =========================================================
-      # UPLOAD IPA
-      # =========================================================
+          echo "Found app: $APP"
+          IPA_DIR="$RUNNER_TEMP/unsigned-ipa"
+          mkdir -p "$IPA_DIR/Payload"
+          cp -R "$APP" "$IPA_DIR/Payload/"
+          (cd "$IPA_DIR" && zip -qry "$GITHUB_WORKSPACE/FlappyCraftz-Unsigned.ipa" Payload)
+          unzip -t "$GITHUB_WORKSPACE/FlappyCraftz-Unsigned.ipa" >/dev/null
+          ls -lh "$GITHUB_WORKSPACE/FlappyCraftz-Unsigned.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
